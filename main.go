@@ -11,7 +11,6 @@ func main() {
 	cfg := &apiConfig{}
 	smx := http.NewServeMux()
 	smx.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
-	smx.Handle("/app/assets/logo.png", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
 	smx.HandleFunc("/healthz", handlerHealthz)
 	smx.HandleFunc("/metrics", cfg.handlerMetrics)
 	smx.HandleFunc("/reset", cfg.handlerReset)
