@@ -1,22 +1,38 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/horsedevours/chirpy/internal/database"
+	_ "github.com/jackc/pgx"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	cfg := &apiConfig{}
+	godotenv.Load()
+	dbString := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbString)
+	if err != nil {
+		fmt.Printf("error connecting to database: %v", err)
+		os.Exit(1)
+	}
+	cfg := &apiConfig{dbQueries: *database.New(db)}
 	smx := http.NewServeMux()
 	smx.Handle("/app/", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
 	smx.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	smx.HandleFunc("POST /admin/reset", cfg.handlerReset)
-	smx.HandleFunc("GET /api/healthz", handlerHealthz)
+	smx.HandleFunc("GET /admin/healthz", handlerHealthz)
 	smx.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	smx.HandleFunc("POST /api/users", handlerPostUser)
 
 	srvr := http.Server{
 		Handler: smx,
@@ -70,6 +86,7 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -98,4 +115,36 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+func (cfg *apiConfig) handlerPostUser(w http.ResponseWriter, r *http.Request) {
+	email := struct {
+		Email string `jsont:"email"`
+	}{}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("error reading request body: %v", err)
+		return
+	}
+	err = json.Unmarshal(data, &email)
+	if err != nil {
+		log.Printf("error unmarshalling request data: %v", err)
+		return
+	}
+
+	user, err := cfg.dbQueries.CreateUser(context.Background(), sql.NullString{String: email.Email, Valid: true})
+	if err != nil {
+		log.Printf("error creating user: %v", err)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	resp, err := json.Marshal(user)
+	if err != nil {
+		log.Printf("error marshalling user: %v", err)
+		return
+	}
+	w.Write(resp)
+	return
 }
